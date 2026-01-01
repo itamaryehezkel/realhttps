@@ -1,0 +1,10 @@
+#!/bin/bash
+gcc -c ./main.c
+gcc -c ./xxhash.c
+gcc main.o ./xxhash.o -pthread -lssl -lcrypto -o ./itl_server
+
+
+# gcc `mysql_config --cflags --libs` -o /home/itamar/Workspace/Backend/itl_server /home/itamar/Workspace/Backend/main.c /home/itamar/Workspace/Backend/https/ITL/xxhash.c -pthread -lssl -lcrypto
+
+#cat /home/itamar/Project/www/itl.c | /home/itamar/Project/report/r
+ #mysql_config --cflags --libs
