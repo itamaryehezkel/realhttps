@@ -77,7 +77,7 @@ typedef struct {
 
     /* URI */
     char * uri;
-    int uri_query_len; /* 0 if no query */
+    char * query; /* 0 if no query */
 
     /* headers block */
     int headers_start;
@@ -738,13 +738,15 @@ int detect_uri(Request * req){
         int position = (int)((char*)ptr - req->buffer);
         req->uri = calloc(position+1, sizeof(char));
         strncpy(req->uri, req->buffer, position);  
-        req->buffer += position;
-        return position;
+        req->buffer += position+1;
+        return strstr(req->buffer, "..") ? 0 : position;
     } else {
       return 0;
     }
 }
-
+int detect_version(Request * req){
+  
+}
 
 // ================================================================================================================
 
@@ -755,9 +757,9 @@ void handle_traffic(Request * req){
   int pos = detect_uri(req);
   if(pos == 0)
     goto finish;
-  else{
     
-  }
+  detect_version(req);
+  
   printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri);
   
   char * headers = calloc(BUFFER_SIZE, sizeof(char));
