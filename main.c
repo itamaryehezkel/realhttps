@@ -90,6 +90,11 @@ typedef struct {
 
 } Request;
 
+typedef struct {
+    size_t size;
+    char *data;
+} FileInfo;
+
 const char *req_method_str(const Request *req) {
     if (!req) return "UNSUPPORTED";
     switch (req->method) {
@@ -730,6 +735,7 @@ void configure_ssl_context(SSL_CTX *ctx) {
     }
 }
 
+char *strnstr(const char *haystack, const char *needle, size_t len) { size_t needle_len = strlen(needle); if (needle_len == 0) return (char *)haystack; for (size_t i = 0; i + needle_len <= len; i++) { if (haystack[i] == needle[0] && memcmp(haystack + i, needle, needle_len) == 0) { return (char *)(haystack + i); } } return NULL; }
 
 int detect_uri(Request * req){
   void * ptr =  memchr(req->buffer, ' ', MAX_URI_LENGTH);
@@ -738,8 +744,10 @@ int detect_uri(Request * req){
         int position = (int)((char*)ptr - req->buffer);
         req->uri = calloc(position+1, sizeof(char));
         strncpy(req->uri, req->buffer, position);  
+        if(strnstr(req->buffer, "..", position) != NULL)
+          return 0;
         req->buffer += position+1;
-        return strstr(req->buffer, "..") ? 0 : position;
+        return position;
     } else {
       return 0;
     }
@@ -750,12 +758,63 @@ int detect_version(Request * req){
 
 // ================================================================================================================
 
+FileInfo get_file(const char* filename) {
+    FileInfo result;
+    result.data = NULL;
+    result.size = 0;
+    char path[1024];
+    strcpy(path, "../www/");
+    strcat(path, filename);
+    // printf("%s\n", path);
+    FILE* file = fopen(path, "r");
+    if (!file) {
+        perror("Failed to open file");
+        return result;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        perror("fseek failed");
+        fclose(file);
+        return result;
+    }
+
+    long size = ftell(file);
+    if (size < 0) {
+        perror("ftell failed");
+        fclose(file);
+        return result;
+    }
+    rewind(file);
+
+    unsigned char* buffer = (unsigned char*)calloc(size/sizeof(unsigned char), sizeof(unsigned char));
+    if (!buffer) {
+        perror("Memory allocation failed");
+        fclose(file);
+        return result;
+    }
+
+    size_t read = fread(buffer, 1, size, file);
+    fclose(file);
+
+    if (read != (size_t)size) {
+        fprintf(stderr, "Only read %zu of %ld bytes\n", read, size);
+        free(buffer);
+        return result;
+    }
+
+    result.data = buffer;
+    result.size = read;
+    //itlc = result;
+    return result;
+}
+
+
 void handle_traffic(Request * req){
   //printf("%s\n", req->buffer);
   char * buf = req->buffer;
   detect_method(req);
   int pos = detect_uri(req);
-  if(pos == 0)
+  if(!pos)
     goto finish;
     
   detect_version(req);
@@ -763,12 +822,18 @@ void handle_traffic(Request * req){
   printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri);
   
   char * headers = calloc(BUFFER_SIZE, sizeof(char));
-  sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", "text/html", 11);
+  
+  FileInfo file = get_file(req->uri);
+  if(file.data == NULL){
+      sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\nNot Found", "404 Not Found", "text/html", 11);
+      goto finish;
+  }else
+    sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", "text/html", file.size);
   ssl_write_all(req->con->ssl, headers, strlen(headers));
   
-  char * body = calloc(BUFFER_SIZE, sizeof(char));
-  strcpy(body, "Hello World");
-  ssl_write_all(req->con->ssl, body, strlen(body));
+  //char * body = calloc(BUFFER_SIZE, sizeof(char));
+  //strcpy(body, "Hello World");
+  ssl_write_all(req->con->ssl, file.data, file.size);
 
 finish:
   SSL_shutdown(req->con->ssl);
