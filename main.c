@@ -76,8 +76,7 @@ typedef struct {
     int version_len;
 
     /* URI */
-    int uri_start;
-    int uri_len;
+    char * uri;
     int uri_query_len; /* 0 if no query */
 
     /* headers block */
@@ -732,8 +731,18 @@ void configure_ssl_context(SSL_CTX *ctx) {
 }
 
 
-void detect_uri(Request * req){
-
+int detect_uri(Request * req){
+  void * ptr =  memchr(req->buffer, ' ', MAX_URI_LENGTH);
+  if (ptr != NULL) {
+        // Calculate the position using pointer arithmetic
+        int position = (int)((char*)ptr - req->buffer);
+        req->uri = calloc(position+1, sizeof(char));
+        strncpy(req->uri, req->buffer, position);  
+        req->buffer += position;
+        return position;
+    } else {
+      return 0;
+    }
 }
 
 
@@ -743,8 +752,13 @@ void handle_traffic(Request * req){
   //printf("%s\n", req->buffer);
   char * buf = req->buffer;
   detect_method(req);
-  detect_uri(req);
-  printf("%s: %s %s\n", req->ip, req_method_str(req), req->buffer);
+  int pos = detect_uri(req);
+  if(pos == 0)
+    goto finish;
+  else{
+    
+  }
+  printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri);
   
   char * headers = calloc(BUFFER_SIZE, sizeof(char));
   sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", "text/html", 11);
@@ -753,7 +767,8 @@ void handle_traffic(Request * req){
   char * body = calloc(BUFFER_SIZE, sizeof(char));
   strcpy(body, "Hello World");
   ssl_write_all(req->con->ssl, body, strlen(body));
-  
+
+finish:
   SSL_shutdown(req->con->ssl);
   SSL_free(req->con->ssl);
   close(req->con->sock);
