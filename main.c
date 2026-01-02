@@ -807,6 +807,80 @@ FileInfo get_file(const char* filename) {
     //itlc = result;
     return result;
 }
+const char *get_extension(const char *uri) {
+    if (!uri)
+        return NULL;
+
+    const char *filename = uri;
+    const char *slash = strrchr(uri, '/');
+
+    if (slash && *(slash + 1) != '\0')
+        filename = slash + 1;
+
+    const char *dot = strrchr(filename, '.');
+
+    if (!dot || dot == filename)
+        return NULL;
+
+    return dot + 1;
+}
+
+const char *get_content_type(const char *ext) {
+    if (!ext)
+        return "application/octet-stream";
+
+    // normalize to lowercase for comparison
+    char lower[32];
+    size_t i = 0;
+    for (; ext[i] && i < sizeof(lower) - 1; i++)
+        lower[i] = tolower((unsigned char)ext[i]);
+    lower[i] = '\0';
+
+    // common MIME types (HTTP standard + widely used)
+    if (strcmp(lower, "html") == 0 || strcmp(lower, "htm") == 0)
+        return "text/html";
+    if (strcmp(lower, "css") == 0)
+        return "text/css";
+    if (strcmp(lower, "js") == 0)
+        return "application/javascript";
+    if (strcmp(lower, "json") == 0)
+        return "application/json";
+    if (strcmp(lower, "txt") == 0)
+        return "text/plain";
+    if (strcmp(lower, "xml") == 0)
+        return "application/xml";
+
+    // images
+    if (strcmp(lower, "jpg") == 0 || strcmp(lower, "jpeg") == 0)
+        return "image/jpeg";
+    if (strcmp(lower, "png") == 0)
+        return "image/png";
+    if (strcmp(lower, "gif") == 0)
+        return "image/gif";
+    if (strcmp(lower, "svg") == 0)
+        return "image/svg+xml";
+    if (strcmp(lower, "webp") == 0)
+        return "image/webp";
+
+    // fonts
+    if (strcmp(lower, "woff") == 0)
+        return "font/woff";
+    if (strcmp(lower, "woff2") == 0)
+        return "font/woff2";
+    if (strcmp(lower, "ttf") == 0)
+        return "font/ttf";
+    if (strcmp(lower, "otf") == 0)
+        return "font/otf";
+
+    // binary / downloads
+    if (strcmp(lower, "pdf") == 0)
+        return "application/pdf";
+    if (strcmp(lower, "zip") == 0)
+        return "application/zip";
+
+    // default fallback (RFC 2046)
+    return "application/octet-stream";
+}
 
 
 void handle_traffic(Request * req){
@@ -819,7 +893,7 @@ void handle_traffic(Request * req){
     
   detect_version(req);
   
-  printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri);
+  printf("%s: %s %s %s\n", req->ip, req_method_str(req), req->uri, "");
   
   char * headers = calloc(BUFFER_SIZE, sizeof(char));
   
@@ -828,7 +902,7 @@ void handle_traffic(Request * req){
       sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\nNot Found", "404 Not Found", "text/html", 11);
       goto finish;
   }else
-    sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", "text/html", file.size);
+    sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", get_content_type(get_extension(req->uri)), file.size);
   ssl_write_all(req->con->ssl, headers, strlen(headers));
   
   //char * body = calloc(BUFFER_SIZE, sizeof(char));
