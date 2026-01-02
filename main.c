@@ -629,7 +629,7 @@ void https_start(char * bind_addr, int https_port, int http_port, char * domain)
     while (1) {
     connection_t *connection = malloc(sizeof(connection_t));
     if (!connection) {
-        perror("Memory allocation failed");
+        perror("Memory allocation failed1");
         continue;
     }
 
@@ -742,8 +742,12 @@ int detect_uri(Request * req){
   if (ptr != NULL) {
         // Calculate the position using pointer arithmetic
         int position = (int)((char*)ptr - req->buffer);
-        req->uri = calloc(position+1, sizeof(char));
-        strncpy(req->uri, req->buffer, position);  
+        req->uri = calloc(position+10, sizeof(char));
+        
+        strncpy(req->uri, req->buffer, position);
+        if(strcmp(req->uri, "/") == 0 ){
+          strcat(req->uri, "index.html");
+        }
         if(strnstr(req->buffer, "..", position) != NULL)
           return 0;
         req->buffer += position+1;
@@ -753,7 +757,22 @@ int detect_uri(Request * req){
     }
 }
 int detect_version(Request * req){
-  
+   void * ptr =  memchr(req->buffer, '\n', 15);
+  if (ptr != NULL) {
+        // Calculate the position using pointer arithmetic
+        int position = (int)((char*)ptr - req->buffer);
+        char * version = calloc(position+15, sizeof(char));
+        
+        strncpy(version, req->buffer, position);
+        version[position] = '\0';
+        if(strcmp("HTTP/1.1\r", version) != 0 || strcmp("HTTP/1.1", version) != 0 )
+          return 0;
+       
+        req->buffer += position+1;
+        return position;
+    } else {
+      return 0;
+    }
 }
 
 // ================================================================================================================
@@ -763,9 +782,9 @@ FileInfo get_file(const char* filename) {
     result.data = NULL;
     result.size = 0;
     char path[1024];
-    strcpy(path, "../www/");
+    strcpy(path, "../www");
     strcat(path, filename);
-    // printf("%s\n", path);
+     printf("%s\n", path);
     FILE* file = fopen(path, "r");
     if (!file) {
         perror("Failed to open file");
@@ -788,7 +807,7 @@ FileInfo get_file(const char* filename) {
 
     unsigned char* buffer = (unsigned char*)calloc(size/sizeof(unsigned char), sizeof(unsigned char));
     if (!buffer) {
-        perror("Memory allocation failed");
+        perror("Memory allocation failed2");
         fclose(file);
         return result;
     }
@@ -881,19 +900,73 @@ const char *get_content_type(const char *ext) {
     // default fallback (RFC 2046)
     return "application/octet-stream";
 }
+int parse_request_line(Request *req) {
+    char *buf = req->buffer;
+
+    // Find end of request line
+    char *end = strstr(buf, "\r\n");
+    if (!end)
+        return 0;
+
+    int line_len = end - buf;
+    if (line_len <= 0 || line_len >= 2048)
+        return 0;
+
+    // Copy request line into a safe local buffer
+    char line[2048];
+    memcpy(line, buf, line_len);
+    line[line_len] = '\0';
+
+    // METHOD URI VERSION
+    char method[16], uri[1024], version[16];
+
+    if (sscanf(line, "%15s %1023s %15s", method, uri, version) != 3)
+        return 0;
+
+    // Parse method
+    if      (!strcasecmp(method, "GET"))    req->method = M_GET;
+    else if (!strcasecmp(method, "POST"))   req->method = M_POST;
+    else if (!strcasecmp(method, "PUT"))    req->method = M_PUT;
+    else if (!strcasecmp(method, "DELETE")) req->method = M_DELETE;
+    else if (!strcasecmp(method, "PATCH"))  req->method = M_PATCH;
+    else if (!strcasecmp(method, "HEAD"))   req->method = M_HEAD;
+    else if (!strcasecmp(method, "OPTIONS"))req->method = M_OPTIONS;
+    else req->method = M_UNSUPPORTED;
+
+    // Normalize URI
+    if (strcmp(uri, "/") == 0)
+        strcpy(uri, "/index.html");
+
+    req->uri = strdup(uri);
+    if (!req->uri)
+        return 0;
+
+    // Validate version
+    if (strcmp(version, "HTTP/1.1") != 0)
+        return 0;
+
+    // Advance buffer to start of headers
+    req->buffer = end + 2;
+
+    return 1;
+}
 
 
 void handle_traffic(Request * req){
   //printf("%s\n", req->buffer);
   char * buf = req->buffer;
+  parse_request_line(req);
+  /*
   detect_method(req);
   int pos = detect_uri(req);
   if(!pos)
     goto finish;
     
-  detect_version(req);
-  
-  printf("%s: %s %s %s\n", req->ip, req_method_str(req), req->uri, "");
+  pos = detect_version(req); //returns 0 on wrong version
+  if(!pos)
+    goto finish;*/
+    
+  printf("%s: %s %s \n%s\n", req->ip, req_method_str(req), req->uri, req->buffer);
   
   char * headers = calloc(BUFFER_SIZE, sizeof(char));
   
@@ -908,12 +981,15 @@ void handle_traffic(Request * req){
   //char * body = calloc(BUFFER_SIZE, sizeof(char));
   //strcpy(body, "Hello World");
   ssl_write_all(req->con->ssl, file.data, file.size);
+  free(file.data);
+
 
 finish:
   SSL_shutdown(req->con->ssl);
   SSL_free(req->con->ssl);
   close(req->con->sock);
-
+  if (req->uri) free(req->uri); 
+  if (headers) free(headers); 
   free(buf);
   free(req->con);
   free(req);
