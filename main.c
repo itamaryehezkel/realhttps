@@ -418,6 +418,67 @@ int ssl_read_request(SSL *ssl, Request *req, int buffer_size)
     }
 }
 
+// ----------------------
+// Simple Hashmap for Headers
+// ----------------------
+
+#define HEADER_BUCKETS 64
+
+typedef struct header_node {
+    char *key;
+    char *value;
+    struct header_node *next;
+} header_node;
+
+typedef struct {
+    header_node *buckets[HEADER_BUCKETS];
+} header_map;
+
+unsigned int hash_key(const char *key) {
+    unsigned int h = 5381;
+    while (*key)
+        h = ((h << 5) + h) + tolower(*key++);
+    return h % HEADER_BUCKETS;
+}
+
+void header_map_init(header_map *map) {
+    memset(map->buckets, 0, sizeof(map->buckets));
+}
+
+void header_map_put(header_map *map, const char *key, const char *value) {
+    unsigned int h = hash_key(key);
+
+    header_node *node = malloc(sizeof(header_node));
+    node->key = strdup(key);
+    node->value = strdup(value);
+    node->next = map->buckets[h];
+    map->buckets[h] = node;
+}
+
+const char *header_map_get(header_map *map, const char *key) {
+    unsigned int h = hash_key(key);
+    header_node *node = map->buckets[h];
+
+    while (node) {
+        if (strcasecmp(node->key, key) == 0)
+            return node->value;
+        node = node->next;
+    }
+    return NULL;
+}
+
+void header_map_free(header_map *map) {
+    for (int i = 0; i < HEADER_BUCKETS; i++) {
+        header_node *node = map->buckets[i];
+        while (node) {
+            header_node *next = node->next;
+            free(node->key);
+            free(node->value);
+            free(node);
+            node = next;
+        }
+    }
+}
 
 
 // ---------------------------------------------------------------------------------------------------
@@ -453,13 +514,13 @@ void *handle_https(void *arg) {
     int rr = ssl_read_request(con->ssl, req, BUFFER_SIZE);
     if (rr < 0) {
         fprintf(stderr, "ssl_read_request failed\n");
-        SSL_shutdown(con->ssl);
-        SSL_free(con->ssl);
-        close(con->sock);
+        SSL_shutdown(req->con->ssl);
+        SSL_free(req->con->ssl);
+        close(req->con->sock);
 
         free(req->buffer);
         free(req);
-        free(con);
+        free(req->con);
     }
 
     //printf("%s: %s\n", req->ip, req->buffer);
@@ -950,47 +1011,121 @@ int parse_request_line(Request *req) {
 
     return 1;
 }
+header_map *parse_headers(Request *req) {
+    if (!req || !req->buffer)
+        return NULL;
+
+    header_map *map = malloc(sizeof(header_map));
+    if (!map)
+        return NULL;
+
+    header_map_init(map);
+
+    char *p = req->buffer;
+
+    while (1) {
+        char *end = strstr(p, "\r\n");
+        if (!end) {
+            header_map_free(map);
+            free(map);
+            return NULL;
+        }
+
+        int len = end - p;
+
+        // blank line = end of headers
+        if (len == 0) {
+            req->buffer = end + 2;   // move pointer to body
+            return map;
+        }
+
+        if (len >= 2048) {
+            header_map_free(map);
+            free(map);
+            return NULL;
+        }
+
+        char line[2048];
+        memcpy(line, p, len);
+        line[len] = '\0';
+
+        char *colon = strchr(line, ':');
+        if (!colon) {
+            header_map_free(map);
+            free(map);
+            return NULL;
+        }
+
+        *colon = '\0';
+        char *key = line;
+        char *value = colon + 1;
+
+        while (*value == ' ') value++;
+
+        header_map_put(map, key, value);
+
+        p = end + 2;
+    }
+}
 
 
-void handle_traffic(Request * req){
-  //printf("%s\n", req->buffer);
-  char * buf = req->buffer;
-  parse_request_line(req);
-  /*
-  detect_method(req);
-  int pos = detect_uri(req);
-  if(!pos)
-    goto finish;
+
+void handle_traffic(Request *req) {
+    char *buf = req->buffer;
+
+    // ---- Parse request line ----
+    if (!parse_request_line(req)) {
+        goto finish;
+    }
+
+    // ---- Parse headers into map ----
+    header_map *headers = parse_headers(req); 
+    if (!headers) goto finish; // Example: read Host header 
+    const char *host = header_map_get(headers, "Host"); 
     
-  pos = detect_version(req); //returns 0 on wrong version
-  if(!pos)
-    goto finish;*/
+  
+    // Example: read Host header
     
-  printf("%s: %s %s \n%s\n", req->ip, req_method_str(req), req->uri, req->buffer);
-  
-  char * headers = calloc(BUFFER_SIZE, sizeof(char));
-  
-  FileInfo file = get_file(req->uri);
-  if(file.data == NULL){
-      sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\nNot Found", "404 Not Found", "text/html", 11);
-      goto finish;
-  }else
-    sprintf(headers, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", "200 OK", get_content_type(get_extension(req->uri)), file.size);
-  ssl_write_all(req->con->ssl, headers, strlen(headers));
-  
-  //char * body = calloc(BUFFER_SIZE, sizeof(char));
-  //strcpy(body, "Hello World");
-  ssl_write_all(req->con->ssl, file.data, file.size);
-  free(file.data);
+    printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri, host);
 
+    // ---- Build response ----
+    char *response_headers = calloc(BUFFER_SIZE, sizeof(char));
+
+    FileInfo file = get_file(req->uri);
+    if (!file.data) {
+        sprintf(response_headers,
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Type: text/html\r\n"
+                "Content-Length: 11\r\n"
+                "Connection: close\r\n\r\n"
+                "Not Found");
+        ssl_write_all(req->con->ssl, response_headers, strlen(response_headers));
+        goto finish;
+    }
+
+    sprintf(response_headers,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %ld\r\n"
+            "Connection: close\r\n\r\n",
+            get_content_type(get_extension(req->uri)),
+            file.size);
+
+    ssl_write_all(req->con->ssl, response_headers, strlen(response_headers));
+    ssl_write_all(req->con->ssl, file.data, file.size);
+
+    free(file.data);
+    free(response_headers);
+    header_map_free(headers);
+    free(headers);
 
 finish:
-  SSL_shutdown(req->con->ssl);
-  SSL_free(req->con->ssl);
-  close(req->con->sock);
-  if (req->uri) free(req->uri); 
-  if (headers) free(headers); 
-  free(buf);
-  free(req->con);
-  free(req);
+    SSL_shutdown(req->con->ssl);
+    SSL_free(req->con->ssl);
+    close(req->con->sock);
+
+    if (req->uri) free(req->uri);
+    free(buf);
+    free(req->con);
+    free(req);
 }
