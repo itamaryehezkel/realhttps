@@ -510,7 +510,7 @@ void handle_traffic(Request *req) {
   
     // Example: read Host header
     
-    printf("%s: %s %s\n", req->ip, req_method_str(req), req->uri, host);
+    printf("%s: %s %s %s\n", req->ip, req_method_str(req), req->uri, host);
 
     // ---- Build response ----
     
@@ -520,8 +520,10 @@ void handle_traffic(Request *req) {
     
     //IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
     char *response_headers = calloc(BUFFER_SIZE, sizeof(char));
-
-    FileInfo file = get_file("../www",req->uri);
+    char * folder = calloc(256, sizeof(char));
+    strcpy(folder,"../");
+    strcat(folder, host);
+    FileInfo file = get_file(folder,req->uri);
     if (!file.data) {
         sprintf(response_headers,
                 "HTTP/1.1 404 Not Found\r\n"
